@@ -6,4 +6,8 @@ server: udpserver.c
 client: udpclient.c
 	gcc -Wall -g udpclient.c -o client
 
+runclient: client
+	./client 5555 127.0.0.1
 
+runserver: server
+	./server 5555
