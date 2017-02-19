@@ -58,23 +58,40 @@ int main(int argc, char** argv){
     struct sockaddr* sockAddrPtr = (struct sockaddr*)&clientAddr;
     while(1){
         recvfrom(udpSocket,buffer,sizeof(buffer),0,sockAddrPtr, &addr_size);
-	sendto(udpSocket,"ack",3,0,sockAddrPtr ,addr_size); //Received filepath
+	    sendto(udpSocket,"ack",3,0,sockAddrPtr ,addr_size); //Received filepath
         
-	/*print message*/
-	printf("Received from client: %s \n",buffer);
-	if((file = fopen(buffer, "r")) != NULL) {
-	  printf("Found file\n");
-	  sendto(udpSocket,"Y",1,0,sockAddrPtr ,addr_size); //File exists
+	    /*print message*/
+	    printf("Received from client: %s \n",buffer);
+	    if((file = fopen(buffer, "r")) != NULL) {
+	        printf("Found file\n");
+	        sendto(udpSocket,"Y",1,0,sockAddrPtr ,addr_size); //File exists
 	  
-	  //Transfer file here using sliding window
-	  setsockopt(udpSocket,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(serverAddr));
-	  fclose(file);
-	  timeout.tv_sec=0;
-	  setsockopt(udpSocket,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(serverAddr));
-	} else {
-	  printf("Could not find file\n");
-	  sendto(udpSocket,"N",1,0,sockAddrPtr ,addr_size); //File not exist
-	}
+	        //Transfer file here using sliding window
+	        setsockopt(udpSocket,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(serverAddr));
+            
+            //get size of file in bytes
+            int size;
+            uint32_t sendSize;
+
+            fseek(file,0,SEEK_END);
+            size = ftell(file);
+            fseek(file,0,SEEK_SET);
+            sendSize = htonl(size);
+            sendto(udpSocket,&sendSize,sizeof(sendSize),0,sockAddrPtr, addr_size);
+
+            int i = 0;
+            while((nBytes = fread(window[i],1,sizeof(window[i]),file)) > 0){
+                sendto(udpSocket,window[i],sizeof(window[i]),0,sockAddrPtr,addr_size);
+                i++;
+            }
+
+	        fclose(file);
+	        timeout.tv_sec=0;
+	        setsockopt(udpSocket,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(serverAddr));
+	    } else {
+	        printf("Could not find file\n");
+            sendto(udpSocket,"N",1,0,sockAddrPtr ,addr_size); //File not exist
+        }
 	    
     }
     return 0;

@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <libgen.h>
+#include <math.h>
 
 /* base code found at  
  * http://www.programminglogic.com/sockets-programming-in-c-using-udp-datagrams/
@@ -49,9 +50,11 @@ int main(int argc, char **argv){
     struct sockaddr* sockAddrPtr = (struct sockaddr*)&serverAddr;
     while(1){
         printf("Enter file: ");
-	fflush(stdout);
+	    fflush(stdout);
         fgets(fileBuf,sizeof(fileBuf),stdin);
-	if(fileBuf[strlen(fileBuf)-1]=='\n') fileBuf[strlen(fileBuf)-1] = '\0';
+	    if(fileBuf[strlen(fileBuf)-1]=='\n'){ 
+            fileBuf[strlen(fileBuf)-1] = '\0';
+        }
         if(strncmp(fileBuf,"/exit",5)==0){
             close(clientSocket);
             exit(0);
@@ -60,26 +63,38 @@ int main(int argc, char **argv){
         nBytes = strlen(fileBuf) + 1;
     
         /*Send filepath to server, wait for ack packet*/
-	while(strncmp("ack", recvBuf, 3)!=0) {
-	  sendto(clientSocket, fileBuf, nBytes, 0, sockAddrPtr, addr_size);
-	  recvfrom(clientSocket,recvBuf, sizeof(recvBuf), 0, NULL, NULL);
-	}
-	recvfrom(clientSocket, recvBuf, sizeof(recvBuf), 0, NULL, NULL);
-	if(strncmp("N", recvBuf, 1) == 0){
-	  printf("File not found...\n");
-	  exit(0);
-	}
-	printf("File was found!\n");
-	filename = basename(fileBuf);
+	    while(strncmp("ack", recvBuf, 3)!=0) {
+	        sendto(clientSocket, fileBuf, nBytes, 0, sockAddrPtr, addr_size);
+	        recvfrom(clientSocket,recvBuf, sizeof(recvBuf), 0, NULL, NULL);
+	    }
+	    recvfrom(clientSocket, recvBuf, sizeof(recvBuf), 0, NULL, NULL);
+	    if(strncmp("N", recvBuf, 1) == 0){
+	        printf("File not found...\n");
+	        exit(0);
+	    }
+	    printf("File was found!\n");
+	    filename = basename(fileBuf);
 	
-	//Open file using filename variable
-	//Begin to receive packets from server, while sending ack packets
-
+    	//Open file using filename variable
+        FILE * fp;
+        fp = fopen(filename, "w");
+	
+        //receive size of incoming file
+        
+        int size, numPackets;
+        uint32_t sendSize;
+        recvfrom(clientSocket,&sendSize,sizeof(sendSize),0,NULL,NULL);
+        size = ntohl(sendSize);
+        numPackets = ceil((double)size/ (double)1024);
+        
+        //Begin to receive packets from server, while sending ack packets
         /*Receive message from server*/
-        nBytes = recvfrom(clientSocket,recvBuf,1024,0,NULL, NULL);
-
-        printf("Received from server: %s\n",recvBuf);
+        while(numPackets > 0){
+            nBytes = recvfrom(clientSocket,recvBuf,1024,0,NULL, NULL);
+            fwrite(recvBuf,sizeof(recvBuf),1,fp);
+            printf("Received from server: %s\n",recvBuf);
+            numPackets--;
+        }
     }
-
     return 0;
 }
