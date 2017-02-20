@@ -145,7 +145,7 @@ void transferfile(FILE* f, int udpSock, struct sockaddr* sockAddrPtr, socklen_t 
     for(i=0; i<5; i++) {
       int ack = acks[(win_start + i)%10];
       if(ack == 0) {
-	sendto(udpSock,window[i],sizeof(sendSize),0,sockAddrPtr, addr_size);
+	sendto(udpSock,window[i],sizeof(window[i]),0,sockAddrPtr, addr_size);
 	numToAck++;
       }
     }

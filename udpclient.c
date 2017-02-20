@@ -101,9 +101,11 @@ int main(int argc, char **argv){
         while(numPackets > 0){
             nBytes = recvfrom(clientSocket,recvBuf,1024,0,NULL, NULL);
 	    printf("Received file packet. Size: %d\n", nBytes);
-	    printf("Sending ack packet (Seq Num: %s)\n", recvBuf);
+	    char seqNum;
+	    strncpy(&seqNum,recvBuf, 1); 
+	    printf("Sending ack packet (Seq Num: %c)\n", seqNum);
 	    sendto(clientSocket, recvBuf, 1, 0, sockAddrPtr, addr_size);
-            fwrite(recvBuf,sizeof(recvBuf),1,fp);
+            fwrite(&recvBuf[1],nBytes-1,1,fp);
             //printf("Received from server: %s\n",recvBuf);
             numPackets--;
         }
