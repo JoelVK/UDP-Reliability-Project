@@ -22,7 +22,7 @@ int main(int argc, char **argv){
     char fileBuf[PACK_SIZE];
     char* filename;
     char recvBuf[PACK_SIZE];
-    char window[WIN_SIZE][PACK_SIZE];
+    char window[WIN_SIZE][PACK_SIZE]
     struct sockaddr_in serverAddr;
     socklen_t addr_size;
 
@@ -94,14 +94,17 @@ int main(int argc, char **argv){
 
 	//Calculate number of packets that will be sent
         size = ntohl(sendSize);
-        numPackets = ceil((double)size/ (double)1024);
+        numPackets = ceil((double)size/ (double)PACK_SIZE);
         
         //Begin to receive packets from server, while sending ack packets
         /*Receive message from server*/
+	int id;
         while(numPackets > 0){
-            nBytes = recvfrom(clientSocket,recvBuf,1024,0,NULL, NULL);
+            nBytes = recvfrom(clientSocket,recvBuf,PACK_SIZE,0,NULL, NULL);
 	    printf("Received file packet. Size: %d\n", nBytes);
+	    id = atoi(recvBuf[0]);
 	    printf("Sending ack packet\n");
+	    sendto(clientSocket, fileBuf, nBytes, 0, sockAddrPtr, addr_size);
             fwrite(recvBuf,sizeof(recvBuf),1,fp);
             //printf("Received from server: %s\n",recvBuf);
             numPackets--;
