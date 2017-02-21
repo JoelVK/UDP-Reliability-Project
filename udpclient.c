@@ -15,6 +15,8 @@
 #define WIN_SIZE 5
 #define PACK_SIZE 1024
 
+void receiveFile(FILE* f, int clientSocket, struct sockaddr* sockAddrPtr, socklen_t addr_size);
+
 int main(int argc, char **argv){
     int portNum = 0;
     char ipAddr[13];
@@ -22,7 +24,6 @@ int main(int argc, char **argv){
     char fileBuf[PACK_SIZE];
     char* filename;
     char recvBuf[PACK_SIZE];
-    char window[WIN_SIZE][PACK_SIZE];
     struct sockaddr_in serverAddr;
     socklen_t addr_size;
 
@@ -85,31 +86,57 @@ int main(int argc, char **argv){
 	filename = basename(fileBuf);
         FILE * fp;
         fp = fopen(filename, "w");
-	
-        //receive size of incoming file
-        int size, numPackets;
-        uint32_t sendSize;
-        recvfrom(clientSocket,&sendSize,sizeof(sendSize),0,NULL,NULL);
-	printf("Received packet containing file size\n");
-
-	//Calculate number of packets that will be sent
-        size = ntohl(sendSize);
-        numPackets = ceil((double)size/ (double)1024);
-        
-        //Begin to receive packets from server, while sending ack packets
-        /*Receive message from server*/
-        while(numPackets > 0){
-            nBytes = recvfrom(clientSocket,recvBuf,1024,0,NULL, NULL);
-	    printf("Received file packet. Size: %d\n", nBytes);
-	    char seqNum;
-	    strncpy(&seqNum,recvBuf, 1); 
-	    printf("Sending ack packet (Seq Num: %c)\n", seqNum);
-	    sendto(clientSocket, recvBuf, 1, 0, sockAddrPtr, addr_size);
-            fwrite(recvBuf+1,nBytes-1,1,fp); //1023 isnt right FIXIT
-            //printf("Received from server: %s\n",recvBuf);
-            numPackets--;
-        }
+	receiveFile(fp,clientSocket,sockAddrPtr,addr_size);
         fclose(fp);
     }
     return 0;
+}
+
+void receiveFile(FILE* f, int clientSocket, struct sockaddr* sockAddrPtr, socklen_t addr_size){
+    //receive size of incoming file
+    int size, numPackets, nBytes;
+    char window[5][1024], recvBuf[1024];
+    uint32_t sendSize;
+    int new_data[] = { 0, 0, 0, 0, 0 };
+    int last_seqNum = 0;
+    int win_start = 0;
+    int win_end = 0;
+
+    recvfrom(clientSocket,&sendSize,sizeof(sendSize),0,NULL,NULL);
+	printf("Received packet containing file size\n");
+
+	//Calculate number of packets that will be sent
+    size = ntohl(sendSize);
+    numPackets = ceil((double)size/ (double)1024);
+        
+    //Begin to receive packets from server, while sending ack packets
+    
+    /*Receive message from server*/
+    while(numPackets > 0){
+        nBytes = recvfrom(clientSocket,recvBuf,1024,0,NULL, NULL);
+	    
+        //check sequence number
+        printf("Received file packet. Size: %d\n", nBytes);
+	    char seqNumChar;
+	    strncpy(&seqNumChar,recvBuf, 1); 
+	    printf("Sending ack packet (Seq Num: %c)\n", seqNumChar);
+        int seqNum = atoi(&seqNumChar);
+        memcpy(window[seqNum % 5],recvBuf,1024);
+        new_data[seqNum % 5] = 1;
+	    sendto(clientSocket, &seqNumChar, 1, 0, sockAddrPtr, addr_size);
+
+        int i = last_seqNum % 5;
+        for(; i<5; i++) {
+            if(new_data[i] == 1) {
+                last_seqNum = (last_seqNum+1) % 10;
+                printf("Writing %d bytes to file\n", nBytes-1);
+                fwrite(window[i]+1,nBytes-1,1,f); 
+                new_data[i] = 0;
+                //printf("Received from server: %s\n",recvBuf);
+            } else {
+                break;
+            }
+        numPackets--;
+        }
+    }
 }
