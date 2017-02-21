@@ -91,14 +91,7 @@ int main(int argc, char** argv){
 
 	setsockopt(udpSocket,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(serverAddr));
 	transferfile(file, udpSocket, sockAddrPtr, addr_size);
-	/*
-	int i = 0;
-	while((nBytes = fread(window[i],1,sizeof(window[i]),file)) > 0){
-	  printf("Sending file data packet. Size: %d\n", nBytes);
-	  sendto(udpSocket,window[i],nBytes,0,sockAddrPtr,addr_size);
-	  i = (i+1) % WIN_SIZE;
-	}
-	*/
+
 	
 	fclose(file);
 	//Disable timeout
@@ -132,6 +125,7 @@ void transferfile(FILE* f, int udpSock, struct sockaddr* sockAddrPtr, socklen_t 
   int numpacksread = 0;
   int lastpacksize = 0;
   int lastpackpos = -1;
+  int win_count = 0;
 
   while(numpacks > 0) {
     int i, nbytes;
@@ -139,13 +133,16 @@ void transferfile(FILE* f, int udpSock, struct sockaddr* sockAddrPtr, socklen_t 
     //Update window buf
     i = win_end % 5;
     for(; i<5; i++) {
+      if(win_count == 5) break;
       nbytes = fread(buf,1,sizeof(buf),f);
       if(nbytes <= 0) break; //Nothing more to read
       numpacksread++;
-
-      int seqNum = (i+win_start) % 10;
+      win_count++;
+      int seqNum = (win_end) % 10;
       sprintf(window[i],"%d", seqNum);
       memcpy(window[i]+1,buf,1023);
+      sendto(udpSock,window[i],nbytes+1,0,sockAddrPtr, addr_size);
+      printf("Sent packet of size %d and seq. num %c\n", nbytes+1, window[i][0]);
       if(numpacksread == totalpacks){
          lastpacksize = nbytes;
          lastpackpos = i;
@@ -153,54 +150,59 @@ void transferfile(FILE* f, int udpSock, struct sockaddr* sockAddrPtr, socklen_t 
       win_end = (win_end + 1) % 10;
     }
 
+    /*
     //Send/resend unacknowledged packets
     int numToAck = 0;
-    for(i=0; i<5; i++) {
-      int ack = acks[(win_start + i)%10];
-      if(ack == 0) {
-          int psize = 1024;
-          if(i == lastpackpos){
-              psize = lastpacksize + 1;
-          }
-          else{
-              psize = 1024;
-          }
-	    sendto(udpSock,window[i],psize,0,sockAddrPtr, addr_size);
-        printf("Sent packet of size %d and seq. num %c\n", psize, window[i][0]);
 	    numToAck++;
         if(i == lastpackpos) break;
       }
     }
-   
+    */
 
-    //Try to receive acknowledgments
     char ack_buf[1];
-    for(i=0; i<numToAck; i++) {
-      int ack = acks[(win_start + i)%10];
-      if(ack == 0) {
-	    nbytes = recvfrom(udpSock,ack_buf,1,0,sockAddrPtr,&addr_size);
-	    if(nbytes == -1) continue; //Timed out
-	    int ackseqNum = atoi(ack_buf);
-        printf("Received ack for seq. num %d\n", ackseqNum);
-	    acks[ackseqNum] = 1;
-        numpacks--;
-      }
-    }
+    nbytes = recvfrom(udpSock,ack_buf,1,0,sockAddrPtr,&addr_size);
+    if(nbytes == -1) {
 
-    //Shift window as far as possible
-    for(i=0; i<5; i++) {
-      int ack = acks[win_start];
-      if(ack == 1) {
+      //Resend unacknowledged packets in window
+      for(i=0; i<5; i++) {
+	int ack = acks[(win_start + i)%10];
+	if(ack == 0) {
+          int psize = 1024;
+          if(i == lastpackpos){
+	    psize = lastpacksize + 1;
+          }
+          else{
+	    psize = 1024;
+          }
+	  sendto(udpSock,window[i],psize,0,sockAddrPtr, addr_size);
+	  printf("Re-sent packet of size %d and seq. num %c\n", psize, window[i][0]);
+	  if(i == lastpackpos) break;
+	}
+      }
+    } else {
+	int ackseqNum = atoi(ack_buf);
+	printf("Received ack for seq. num %d\n", ackseqNum);
+	acks[ackseqNum] = 1;
+	numpacks--;
+
+	//Shift window as far as possible
+	for(i=0; i<5; i++) {
+	  int ack = acks[win_start];
+	  if(ack == 1) {
 	    acks[win_start] = 0; //reset
 	    win_start = (win_start+1) % 10; //advance window start
-      } else {
+	    win_count--;
+	  } else {
 	    break;
-      }
+	  }
+	}
     }
+
+
   }
-
-
 }
+
+
 
 
 
