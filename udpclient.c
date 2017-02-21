@@ -105,10 +105,11 @@ int main(int argc, char **argv){
 	    strncpy(&seqNum,recvBuf, 1); 
 	    printf("Sending ack packet (Seq Num: %c)\n", seqNum);
 	    sendto(clientSocket, recvBuf, 1, 0, sockAddrPtr, addr_size);
-            fwrite(&recvBuf[1],nBytes-1,1,fp);
+            fwrite(recvBuf+1,nBytes-1,1,fp); //1023 isnt right FIXIT
             //printf("Received from server: %s\n",recvBuf);
             numPackets--;
         }
+        fclose(fp);
     }
     return 0;
 }

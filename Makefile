@@ -1,7 +1,7 @@
 all: server client
 
 server: udpserver.c
-	gcc -Wall -lpthread -g udpserver.c -o server
+	gcc -Wall -g -lpthread -g udpserver.c -lm -o server
 
 client: udpclient.c
 	gcc -Wall -g udpclient.c -lm -o client

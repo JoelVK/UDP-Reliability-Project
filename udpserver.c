@@ -7,6 +7,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <math.h>
 
 /*
  * Joel Vanderklip, Michael Brecker
@@ -23,12 +24,9 @@
 #define PACK_SIZE 1024
 
 void transferfile(FILE* f, int udpSock, struct sockaddr* sockAddrPtr, socklen_t addr_size);
-void* ack_handler(void* arg);
+//void* ack_handler(void* arg);
 int filesize(FILE* file);
 
-int acks[WIN_SIZE*2] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-int win_start = 0;
-int win_end = 0;
 struct sockaddr_in clientAddr;
 
 int main(int argc, char** argv){
@@ -40,10 +38,7 @@ int main(int argc, char** argv){
     FILE* file;
     //char window[WIN_SIZE][PACK_SIZE];
     
-    //timeout for ack packet
-    struct timeval timeout;
-    timeout.tv_sec=1;
-    timeout.tv_usec=0;
+    
     
 
     /*Create UDP socket*/
@@ -74,6 +69,13 @@ int main(int argc, char** argv){
     addr_size = sizeof(clientAddr);
     struct sockaddr* sockAddrPtr = (struct sockaddr*)&clientAddr;
 
+    //timeout for ack packet
+    struct timeval timeout;
+    timeout.tv_sec=1;
+    timeout.tv_usec=0;
+
+
+
     while(1){
       recvfrom(udpSocket,buffer,sizeof(buffer),0,sockAddrPtr, &addr_size);
       printf("Received filepath packet\nSending ack packet\n");
@@ -83,15 +85,8 @@ int main(int argc, char** argv){
 	printf("Sending file confirmation packet\n");
 	sendto(udpSocket,"Y",1,0,sockAddrPtr ,addr_size); //File exists
 	
-	//Set timeout
-	setsockopt(udpSocket,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(serverAddr));
-        
-	//get size of file in bytes
-	uint32_t sendSize;
-	sendSize = htonl(filesize(file));
-	printf("Sending file size packet\n");
-	sendto(udpSocket,&sendSize,sizeof(sendSize),0,sockAddrPtr, addr_size);
 
+	setsockopt(udpSocket,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(serverAddr));
 	transferfile(file, udpSocket, sockAddrPtr, addr_size);
 	/*
 	int i = 0;
@@ -103,6 +98,7 @@ int main(int argc, char** argv){
 	*/
 	
 	fclose(file);
+	//Disable timeout
 	timeout.tv_sec=0;
 	setsockopt(udpSocket,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(serverAddr));
       } else {
@@ -114,80 +110,97 @@ int main(int argc, char** argv){
     return 0;
 }
 
-
-
 void transferfile(FILE* f, int udpSock, struct sockaddr* sockAddrPtr, socklen_t addr_size) {
-  char window[WIN_SIZE][PACK_SIZE];
-  int nbytes = 0;
-  char buf[PACK_SIZE-1];
+  char buf[1023];
+  char window[5][1024];
+  int acks[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+  int win_start = 0;
+  int win_end = 0;
 
-  pthread_t child;
-  pthread_create(&child, NULL, ack_handler, &udpSock);
-  pthread_detach(child);
+        
+  //get size of file in bytes
+  int size = filesize(f);
+  uint32_t sendSize;
+  sendSize = htonl(size);
+  printf("Sending file size packet\n");
+  sendto(udpSock,&sendSize,sizeof(sendSize),0,sockAddrPtr, addr_size);
+  int totalpacks = ceil((double)size / (double) (PACK_SIZE-1));
+  int numpacks = totalpacks;
+  int numpacksread = 0;
+  int lastpacksize = 0;
+  int lastpackpos = -1;
 
-  //socklen_t addr_size = sizeof(clientAddr);
-  //struct sockaddr* sockAddrPtr = (struct sockaddr*)&clientAddr;
-  
-  while(1) {
+  while(numpacks > 0) {
+    int i, nbytes;
 
-    //Reads new data into available packets in window
-    int i = win_end % WIN_SIZE;
-    for(; i<WIN_SIZE; i++) {
+    //Update window buf
+    i = win_end % 5;
+    for(; i<5; i++) {
       nbytes = fread(buf,1,sizeof(buf),f);
-      if(nbytes > 0) {
-	sprintf(window[i%WIN_SIZE], "%d%s", i, buf); //Not sure if this will work to copy
-	//printf("Msg to send: %s\n", window[i%WIN_SIZE]);
-	win_end++;
+      if(nbytes <= 0) break; //Nothing more to read
+      numpacksread++;
+
+      int seqNum = (i+win_start) % 10;
+      sprintf(window[i],"%d", seqNum);
+      memcpy(window[i]+1,buf,1023);
+      if(numpacksread == totalpacks){
+         lastpacksize = nbytes;
+         lastpackpos = i;
       }
-      else {
-	break; //file transfer is complete
+      win_end = (win_end + 1) % 10;
+    }
+
+    //Send/resend unacknowledged packets
+    int numToAck = 0;
+    for(i=0; i<5; i++) {
+      int ack = acks[(win_start + i)%10];
+      if(ack == 0) {
+          int psize = 1024;
+          if(i == lastpackpos){
+              psize = lastpacksize + 1;
+          }
+          else{
+              psize = 1024;
+          }
+	    sendto(udpSock,window[i],psize,0,sockAddrPtr, addr_size);
+        printf("Sent packet of size %d and seq. num %c\n", psize, window[i][0]);
+	    numToAck++;
+        if(i == lastpackpos) break;
+      }
+    }
+   
+
+    //Try to receive acknowledgments
+    char ack_buf[1];
+    for(i=0; i<numToAck; i++) {
+      int ack = acks[(win_start + i)%10];
+      if(ack == 0) {
+	    nbytes = recvfrom(udpSock,ack_buf,1,0,sockAddrPtr,&addr_size);
+	    if(nbytes == -1) continue; //Timed out
+	    int ackseqNum = atoi(ack_buf);
+        printf("Received ack for seq. num %d\n", ackseqNum);
+	    acks[ackseqNum] = 1;
+        numpacks--;
       }
     }
 
-    //Send unacknowledged packets to client
-    for(i=0; i<WIN_SIZE; i++) {
-      int seqNum = (win_start+i) % (WIN_SIZE*2);
-      if(acks[seqNum] == 0) {
-	printf("Sending window packet. Sequence Num:  %d\n",seqNum); 
-	sendto(udpSock,window[i],nbytes,0,sockAddrPtr,addr_size);
+    //Shift window as far as possible
+    for(i=0; i<5; i++) {
+      int ack = acks[win_start];
+      if(ack == 1) {
+	    acks[win_start] = 0; //reset
+	    win_start = (win_start+1) % 10; //advance window start
+      } else {
+	    break;
       }
     }
-
-    sleep(1); //temp sleep, possibly make shorter
-
   }
+
 
 }
 
-//void get_acks(int udpSock, struct sockaddr* sockAddrPtr, socklen_t addr_size) {
-void* ack_handler(void* arg) {
-  int udpSock = *(int*) arg;
-  int nbytes = 0;
-  char ack_buf[1];
-  socklen_t addr_size = sizeof(clientAddr);
-  struct sockaddr* sockAddrPtr = (struct sockaddr*)&clientAddr;
 
-  while(1) {
-    nbytes = recvfrom(udpSock,ack_buf,1,0,sockAddrPtr, &addr_size);
-    if(nbytes != -1) {
-      int seq_num = atoi(ack_buf);
-      acks[seq_num] = 1;
-    
 
-      //Shift window to earliest unread data
-      int i = 0;
-      for(i=0; i<WIN_SIZE; i++) {
-	if(acks[(i+win_start) % (WIN_SIZE*2)] == 1) {
-	  win_start = (win_start+1) % (WIN_SIZE*2);
-	} else {
-	  break;
-	}
-      }
-      
-    }
-    
-  }
-}
 
 
 int filesize(FILE* file) {
