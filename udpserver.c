@@ -54,7 +54,10 @@ int main(int argc, char** argv){
       portNum = atoi(argv[1]);
     }
     printf("Port Number: %d\n", portNum);
-
+    if(portNum < 1024 || portNum > 49151){
+      printf("Invalid port number\n");
+      exit(1);
+    }
 
     /*Configure settings in address struct*/
     serverAddr.sin_family = AF_INET;
