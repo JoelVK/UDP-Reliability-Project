@@ -127,15 +127,16 @@ void recvMsg(char* dst, int dstLen, char expSeqNum, int udpSock, struct sockaddr
     char seqNum = 'z';
     
     //Recieve packet and send acknowledgment
-    while(expSeqNum != seqNum) {
-	recvfrom(udpSock, dst, dstLen, 0, sockAddrPtr, &addr_size);
-	strncpy(&seqNum, dst, 1);
-	printf("Recieved pakcet from client. Seq. Number: %c\n", seqNum);
-	//if(strncmp(&expSeqNum, &seqNum, 1) == 0) {
-	sendto(udpSock, &seqNum, 1,0, sockAddrPtr, addr_size);
-	printf("Sent acknowledgement packet. Seq. Number: %c\n", seqNum);
-	//break;
-	//}
+    while(strncmp(&expSeqNum, &seqNum, 1) != 0) {
+	if(recvfrom(udpSock, dst, dstLen, 0, sockAddrPtr, &addr_size) > 0) {
+	    strncpy(&seqNum, dst, 1);
+	    printf("Recieved message from client. Seq. Number: %c\n", seqNum);
+	    //if(strncmp(&expSeqNum, &seqNum, 1) == 0) {
+	    sendto(udpSock, &seqNum, 1,0, sockAddrPtr, addr_size);
+	    printf("Sent acknowledgement message. Seq. Number: %c\n", seqNum);
+	    //break;
+	    //}
+	}
     }
 }
 
@@ -196,15 +197,17 @@ void transferfile(FILE* f, int udpSock, struct sockaddr* sockAddrPtr, socklen_t 
 	    for(i=0; i<5; i++) {
 		int ack = acks[(win_start + i)%10];
 		if(ack == 0) {
+		    int win_index = (win_start + i) % 5;
 		    int psize = 1024;
-		    if(i == lastpackpos){
+    		    if(i == lastpackpos){
 			psize = lastpacksize + 1;
 		    }
 		    else{
 			psize = 1024;
 		    }
-		    sendto(udpSock,window[i],psize,0,sockAddrPtr, addr_size);
-		    printf("Re-sent packet of size %d and seq. num %c\n", psize, window[i][0]);
+		    
+		    sendto(udpSock,window[win_index],psize,0,sockAddrPtr, addr_size);
+		    printf("Re-sent packet of size %d and seq. num %c\n", psize, window[win_index][0]);
 		    if(i == lastpackpos) break;
 		}
 	    }
@@ -212,8 +215,10 @@ void transferfile(FILE* f, int udpSock, struct sockaddr* sockAddrPtr, socklen_t 
 	    //Ack recieved, record ack for seq. num
 	    int ackseqNum = atoi(ack_buf);
 	    printf("Received ack for seq. num %d\n", ackseqNum);
-	    acks[ackseqNum] = 1;
-	    numpacks--;
+	    if(acks[ackseqNum] == 0) {
+		acks[ackseqNum] = 1;
+		numpacks--;
+	    }
 	    
 	    //Shift window as far as possible
 	    for(i=0; i<5; i++) {
@@ -228,6 +233,7 @@ void transferfile(FILE* f, int udpSock, struct sockaddr* sockAddrPtr, socklen_t 
 	    }
 	}
     }
+    
     printf("File Transfer Completed\n");
 }
 
