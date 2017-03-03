@@ -28,6 +28,7 @@ void transferfile(FILE* f, int udpSock, struct sockaddr* sockAddrPtr, socklen_t 
 void recvMsg(char* dst, int dstLen, char expSeqNum, int udpSock, struct sockaddr* sockAddrPtr, socklen_t addr_size);
 void sendMsg(char* msg, char seqNum, int msgLen, int udpSock,struct sockaddr* sockAddrPtr, socklen_t addr_size);
 int filesize(FILE* file);
+int IsInWindow(int seqNum, int winStart);
 
 struct sockaddr_in clientAddr;
 
@@ -79,13 +80,13 @@ int main(int argc, char** argv){
     
     while(1){
 	//Recieve filepath packet
-	recvMsg(buffer, sizeof(buffer), '0', udpSocket, sockAddrPtr, addr_size); 
+	recvMsg(buffer, sizeof(buffer), 'a', udpSocket, sockAddrPtr, addr_size); 
 	//Open file if exists
 	if((file = fopen(buffer+1, "r")) != NULL) {	    
 	    //Set timeout
 	    setsockopt(udpSocket,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(serverAddr));
 	    //Send packet notifying that file exists
-	    sendMsg("Y", '1', 1, udpSocket, sockAddrPtr, addr_size);
+	    //sendMsg("Y", '1', 1, udpSocket, sockAddrPtr, addr_size);
 
 	    //Transfer file
 	    transferfile(file, udpSocket, sockAddrPtr, addr_size);
@@ -96,7 +97,7 @@ int main(int argc, char** argv){
 	    setsockopt(udpSocket,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(serverAddr));
 	} else {
 	    //Send packet notifying that file could not be found
-	    sendMsg("N", '1', 1, udpSocket, sockAddrPtr, addr_size);
+	    sendMsg("0", 'b', 1, udpSocket, sockAddrPtr, addr_size);
 	}
 	
     }
@@ -155,10 +156,11 @@ void transferfile(FILE* f, int udpSock, struct sockaddr* sockAddrPtr, socklen_t 
     printf("File Size: %d\n", size);
   
     //Send packet containing file size
-    sendMsg((char*)&sendSize, '2', sizeof(sendSize), udpSock, sockAddrPtr, addr_size);
+    sendMsg((char*)&sendSize, 'b', sizeof(sendSize), udpSock, sockAddrPtr, addr_size);
     int totalpacks = ceil((double)size / (double) (PACK_SIZE-1));
     int numpacks = totalpacks;
     int numpacksread = 0;
+    int numpackssent = 0;
     int lastpacksize = 0;
     int lastpackpos = -1;
     int win_count = 0;
@@ -215,7 +217,7 @@ void transferfile(FILE* f, int udpSock, struct sockaddr* sockAddrPtr, socklen_t 
 	    //Ack recieved, record ack for seq. num
 	    int ackseqNum = atoi(ack_buf);
 	    printf("Received ack for seq. num %d\n", ackseqNum);
-	    if(acks[ackseqNum] == 0) {
+	    if(acks[ackseqNum] == 0 && IsInWindow(ackseqNum, win_start) == 1) {
 		acks[ackseqNum] = 1;
 		numpacks--;
 	    }
@@ -235,6 +237,14 @@ void transferfile(FILE* f, int udpSock, struct sockaddr* sockAddrPtr, socklen_t 
     }
     
     printf("File Transfer Completed\n");
+}
+
+int IsInWindow(int seqNum, int winStart) {
+    int i=0;
+    for(i=0; i<5; i++) {
+	if(seqNum == (winStart + i)%10) return 1;
+    }
+    return 0; //Not in window
 }
 
 int filesize(FILE* file) {

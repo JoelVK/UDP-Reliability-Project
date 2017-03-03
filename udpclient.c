@@ -27,6 +27,7 @@
 void receiveFile(FILE* f, int clientSocket, struct sockaddr* sockAddrPtr, socklen_t addr_size);
 void sendMsg(char* msg, int msgLen, char seqNum, int udpSock, struct sockaddr* sockAddrPtr, socklen_t addr_size);
 void recvMsg(char* dst, int dstLen, char expSeqNum, int udpSock, struct sockaddr* sockAddrPtr, socklen_t addr_size);
+int IsInWindow(int seqNum, int winStart);
 
 int main(int argc, char **argv){
     int portNum = 0;
@@ -87,17 +88,19 @@ int main(int argc, char **argv){
         nBytes = strlen(fileBuf) + 1;
 	
         /*Send filepath to server, wait for ack packet*/
-	sendMsg(fileBuf, nBytes, '0', clientSocket, sockAddrPtr, addr_size);
+	sendMsg(fileBuf, nBytes, 'a', clientSocket, sockAddrPtr, addr_size);
 	
+	/*
 	//Recieve file existance packet
-	recvMsg(recvBuf, sizeof(recvBuf), '1', clientSocket, sockAddrPtr, addr_size);
+	recvMsg(recvBuf, sizeof(recvBuf), 'b', clientSocket, sockAddrPtr, addr_size);
        
 	if(strncmp("N", recvBuf, 1) == 0){
 	    printf("Server could not find file...\n");
 	    exit(0);
 	}
 	printf("Server found file!\n");
-	
+	*/
+
 	//Open file using filename variable
 	filename = basename(fileBuf);
         FILE * fp;
@@ -162,17 +165,15 @@ void receiveFile(FILE* f, int clientSocket, struct sockaddr* sockAddrPtr, sockle
 
     //recvfrom(clientSocket,&sendSize,sizeof(sendSize),0,NULL,NULL);
     //printf("Received packet containing file size\n");
-    recvMsg((char*)&sendSize, sizeof(sendSize), '2', clientSocket, sockAddrPtr, addr_size);
+    recvMsg((char*)&sendSize, sizeof(sendSize), 'b', clientSocket, sockAddrPtr, addr_size);
     //sendSize = atoi(buf);
     
     //Calculate number of packets that will be sent
     size = ntohl(sendSize);
     printf("File size: %d\n", size);
+    if(size == 0) return;
     numPackets = ceil((double)size/ (double)1024);
-    
     lastPackNum = (numPackets % 10) - 1;
-    printf("Last packet sequence number: %d\n", lastPackNum);
-    //Begin to receive packets from server, while sending ack packets
     
     /*Receive message from server*/
     while(num_written < numPackets){
@@ -180,20 +181,39 @@ void receiveFile(FILE* f, int clientSocket, struct sockaddr* sockAddrPtr, sockle
 	    nBytes = recvfrom(clientSocket,recvBuf,1024,0,NULL, NULL);
 	
 	    //check sequence number
-	    printf("Received file packet. Size: %d\n", nBytes);
 	    char seqNumChar;
-	    strncpy(&seqNumChar,recvBuf, 1); 
+	    strncpy(&seqNumChar,recvBuf, 1);
+	    printf("Received file packet (Seq. Num: %c). Size: %d\n",seqNumChar,  nBytes);
 	    printf("Sending ack packet (Seq Num: %c)\n", seqNumChar);
 	    sendto(clientSocket, &seqNumChar, 1, 0, sockAddrPtr, addr_size);
 	    int seqNum = atoi(&seqNumChar);
-	    if(new_data[seqNum%5] == 0) { // seqNum % 5
+	    if(IsInWindow(seqNum, win_start) == 0) continue;
+	    if(new_data[seqNum] == 0) { // seqNum % 5
       		memcpy(window[seqNum % 5],recvBuf,1024);
-		new_data[seqNum%5] = 1; // seqNum % 5
+		new_data[seqNum] = 1; // seqNum % 5
 		num_recieved++;
 		if(seqNum == lastPackNum) lastPacketSize = nBytes;
 	    }
 	    //} 
-
+	    
+	    //int count = 0;
+	    while(1) {
+		win_start = num_written % 10;
+		int size = 1023;
+		if(new_data[win_start] == 1) {
+		    new_data[win_start] = 0;
+		    if(num_written == numPackets - 1) size = lastPacketSize-1;
+		    int win_index = win_start%5;
+		    char seq_number = window[win_index][0];
+		    fwrite(window[win_index] + 1, size,1,f);
+		    printf("Writing %d bytes to file of packet %c\n", size,seq_number);
+		    num_written++;
+		} else {
+		    break;
+		}
+		//if(++count == 5) break;
+	    }
+	    /*
         int i = last_seqNum % 5;
         for(; i<5; i++) {
             if(new_data[i] == 1) {
@@ -208,7 +228,7 @@ void receiveFile(FILE* f, int clientSocket, struct sockaddr* sockAddrPtr, sockle
             } else {
                 break;
             }
-        }
+	    }*/
     }
 
     struct timeval tout;
@@ -228,4 +248,13 @@ void receiveFile(FILE* f, int clientSocket, struct sockaddr* sockAddrPtr, sockle
     
     //char doneMsg[1] = { 'q' };
     //sendMsg(doneMsg,sizeof(doneMsg), 'q', clientSocket, sockAddrPtr, addr_size);
+}
+
+
+int IsInWindow(int seqNum, int winStart) {
+    int i = 0;
+    for(i=0; i < 5; i++) {
+	if(seqNum == (winStart + i)%10) return 1;
+    }
+    return 0; //Not in window
 }
