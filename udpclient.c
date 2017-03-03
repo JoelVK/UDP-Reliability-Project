@@ -35,7 +35,6 @@ int main(int argc, char **argv){
     int clientSocket, nBytes;
     char fileBuf[PACK_SIZE];
     char* filename;
-    char recvBuf[PACK_SIZE];
     struct sockaddr_in serverAddr;
     socklen_t addr_size;
     
@@ -68,8 +67,6 @@ int main(int argc, char **argv){
     timeout.tv_sec = 1;
     timeout.tv_usec = 0;
 
-    setsockopt(clientSocket,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(serverAddr));
-    
     /*Initialize size variable to be used later on*/
     addr_size = sizeof(serverAddr);
     struct sockaddr* sockAddrPtr = (struct sockaddr*)&serverAddr;
@@ -88,28 +85,16 @@ int main(int argc, char **argv){
         nBytes = strlen(fileBuf) + 1;
 	
         /*Send filepath to server, wait for ack packet*/
+	setsockopt(clientSocket,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(serverAddr));
 	sendMsg(fileBuf, nBytes, 'a', clientSocket, sockAddrPtr, addr_size);
+	timeout.tv_sec = 0;
+	setsockopt(clientSocket,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(serverAddr));
 	
-	/*
-	//Recieve file existance packet
-	recvMsg(recvBuf, sizeof(recvBuf), 'b', clientSocket, sockAddrPtr, addr_size);
-       
-	if(strncmp("N", recvBuf, 1) == 0){
-	    printf("Server could not find file...\n");
-	    exit(0);
-	}
-	printf("Server found file!\n");
-	*/
-
 	//Open file using filename variable
 	filename = basename(fileBuf);
         FILE * fp;
         fp = fopen(filename, "w");
 	
-	//Disable timeout for file transfer
-	timeout.tv_sec = 0;
-	setsockopt(clientSocket,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(serverAddr));
-
 	receiveFile(fp,clientSocket,sockAddrPtr,addr_size);
         fclose(fp);
     }
@@ -130,7 +115,6 @@ void sendMsg(char* msg, int msgLen, char seqNum, int udpSock, struct sockaddr* s
 	    printf("Recieved acknowledgement packet. SeqNum: %c\n", recvBuf[0]);
 	}
     }
-    printf("message sent successfully\n");
 }
 
 void recvMsg(char* dst, int dstLen, char expSeqNum, int udpSock, struct sockaddr* sockAddrPtr, socklen_t addr_size) {
@@ -140,12 +124,9 @@ void recvMsg(char* dst, int dstLen, char expSeqNum, int udpSock, struct sockaddr
 	if(recvfrom(udpSock, recvBuf, 1024, 0, sockAddrPtr, &addr_size) > 0){
 	    strncpy(&seqNum, recvBuf, 1);
 	    printf("Recieved message from server. SeqNum: %c\n", seqNum);
-	    //if(seqNum == expSeqNum) {
 	    memcpy(dst, recvBuf+1, dstLen);
 	    sendto(udpSock, &seqNum, 1, 0, sockAddrPtr, addr_size);
 	    printf("Sent acknowledgement packet. SeqNum: %c\n", seqNum);	
-	    //  break;
-	    //}
 	} 
     }
 }
@@ -156,81 +137,61 @@ void receiveFile(FILE* f, int clientSocket, struct sockaddr* sockAddrPtr, sockle
     char window[5][1024], recvBuf[1024];
     uint32_t sendSize;
     int new_data[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-    int last_seqNum = 0;
     int num_written = 0;
     int num_recieved = 0;
     int win_start = 0;
     int lastPacketSize = -1;
     int lastPackNum = 0; //sequence number of last packet
 
-    //recvfrom(clientSocket,&sendSize,sizeof(sendSize),0,NULL,NULL);
-    //printf("Received packet containing file size\n");
     recvMsg((char*)&sendSize, sizeof(sendSize), 'b', clientSocket, sockAddrPtr, addr_size);
-    //sendSize = atoi(buf);
     
     //Calculate number of packets that will be sent
     size = ntohl(sendSize);
     printf("File size: %d\n", size);
-    if(size == 0) return;
+    if(size == 0) return; //Nothing to transfer
     numPackets = ceil((double)size/ (double)1024);
     lastPackNum = (numPackets % 10) - 1;
     
     /*Receive message from server*/
     while(num_written < numPackets){
-	//if(num_recieved < numPackets) {
-	    nBytes = recvfrom(clientSocket,recvBuf,1024,0,NULL, NULL);
+	nBytes = recvfrom(clientSocket,recvBuf,1024,0,NULL, NULL);
 	
-	    //check sequence number
-	    char seqNumChar;
-	    strncpy(&seqNumChar,recvBuf, 1);
-	    printf("Received file packet (Seq. Num: %c). Size: %d\n",seqNumChar,  nBytes);
-	    printf("Sending ack packet (Seq Num: %c)\n", seqNumChar);
-	    sendto(clientSocket, &seqNumChar, 1, 0, sockAddrPtr, addr_size);
-	    int seqNum = atoi(&seqNumChar);
-	    if(IsInWindow(seqNum, win_start) == 0) continue;
-	    if(new_data[seqNum] == 0) { // seqNum % 5
-      		memcpy(window[seqNum % 5],recvBuf,1024);
-		new_data[seqNum] = 1; // seqNum % 5
-		num_recieved++;
-		if(seqNum == lastPackNum) lastPacketSize = nBytes;
-	    }
-	    //} 
-	    
-	    //int count = 0;
-	    while(1) {
-		win_start = num_written % 10;
-		int size = 1023;
-		if(new_data[win_start] == 1) {
-		    new_data[win_start] = 0;
-		    if(num_written == numPackets - 1) size = lastPacketSize-1;
-		    int win_index = win_start%5;
-		    char seq_number = window[win_index][0];
-		    fwrite(window[win_index] + 1, size,1,f);
-		    printf("Writing %d bytes to file of packet %c\n", size,seq_number);
-		    num_written++;
-		} else {
-		    break;
-		}
-		//if(++count == 5) break;
-	    }
-	    /*
-        int i = last_seqNum % 5;
-        for(; i<5; i++) {
-            if(new_data[i] == 1) {
-		int size = 1023;
-		if(num_written == numPackets - 1) size = lastPacketSize -1;
-                last_seqNum = (last_seqNum+1) % 5;
-                printf("Writing %d bytes to file\n", size);
-                fwrite(window[i]+1,size,1,f); 
-                new_data[i] = 0;
+	//check sequence number
+	char seqNumChar;
+	strncpy(&seqNumChar,recvBuf, 1);
+	printf("Received file packet (Seq. Num: %c). Size: %d\n",seqNumChar,  nBytes);
+	printf("Sending ack packet (Seq Num: %c)\n", seqNumChar);
+	sendto(clientSocket, &seqNumChar, 1, 0, sockAddrPtr, addr_size);
+	if(seqNumChar == 'a' || seqNumChar == 'b') continue; //not a file packet
+	int seqNum = atoi(&seqNumChar);
+	if(IsInWindow(seqNum, win_start) == 0) continue;
+	if(new_data[seqNum] == 0) { // seqNum % 5
+	    memcpy(window[seqNum % 5],recvBuf,1024);
+	    new_data[seqNum] = 1; // seqNum % 5
+	    num_recieved++;
+	    if(seqNum == lastPackNum) lastPacketSize = nBytes;
+	} 
+	
+	while(1) {
+	    win_start = num_written % 10;
+	    int size = 1023;
+	    if(new_data[win_start] == 1) {
+		new_data[win_start] = 0;
+		if(num_written == numPackets - 1) size = lastPacketSize-1;
+		int win_index = win_start%5;
+		char seq_number = window[win_index][0];
+		fwrite(window[win_index] + 1, size,1,f);
+		printf("Writing %d bytes to file of packet %c\n", size,seq_number);
 		num_written++;
-		win_start++;
-            } else {
-                break;
-            }
-	    }*/
+	    } else {
+		break;
+	    }
+	}
     }
+    printf("File transfer complete!\n");
 
+    //This loop helps clean up server if server still thinks the client
+    //Hasn't recieved everything yet.
     struct timeval tout;
     tout.tv_sec = 2;
     setsockopt(clientSocket,SOL_SOCKET,SO_RCVTIMEO,&tout,addr_size);
@@ -241,15 +202,12 @@ void receiveFile(FILE* f, int clientSocket, struct sockaddr* sockAddrPtr, sockle
 	    strncpy(&seqNumChar,recvBuf, 1); 
 	    printf("Sending ack packet (Seq Num: %c)\n", seqNumChar);
 	    sendto(clientSocket, &seqNumChar, 1, 0, sockAddrPtr, addr_size);
+	    if(seqNumChar == 'a' || seqNumChar == 'b') break;
 	} else {
 	    break;
 	}
     }
-    
-    //char doneMsg[1] = { 'q' };
-    //sendMsg(doneMsg,sizeof(doneMsg), 'q', clientSocket, sockAddrPtr, addr_size);
 }
-
 
 int IsInWindow(int seqNum, int winStart) {
     int i = 0;

@@ -81,25 +81,24 @@ int main(int argc, char** argv){
     while(1){
 	//Recieve filepath packet
 	recvMsg(buffer, sizeof(buffer), 'a', udpSocket, sockAddrPtr, addr_size); 
+	
+	//Set timeout
+	setsockopt(udpSocket,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(serverAddr));
 	//Open file if exists
-	if((file = fopen(buffer+1, "r")) != NULL) {	    
-	    //Set timeout
-	    setsockopt(udpSocket,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(serverAddr));
-	    //Send packet notifying that file exists
-	    //sendMsg("Y", '1', 1, udpSocket, sockAddrPtr, addr_size);
-
+	if((file = fopen(buffer, "r")) != NULL) {	    
 	    //Transfer file
 	    transferfile(file, udpSocket, sockAddrPtr, addr_size);
-	    
-	    //Disable timeout and close file
-	    fclose(file);
-	    timeout.tv_sec=0;
-	    setsockopt(udpSocket,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(serverAddr));
+
+	    fclose(file); //Close file
 	} else {
 	    //Send packet notifying that file could not be found
-	    sendMsg("0", 'b', 1, udpSocket, sockAddrPtr, addr_size);
+	    uint32_t sendSize;
+	    sendSize = htonl(0);
+	    sendMsg((char*)&sendSize, 'b', sizeof(sendSize), udpSocket, sockAddrPtr, addr_size);
 	}
-	
+	//Disable timeout
+	timeout.tv_sec=0;
+	setsockopt(udpSocket,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(serverAddr));
     }
     return 0;
 }
@@ -114,11 +113,15 @@ void sendMsg(char* msg, char seqNum, int msgLen, int udpSock,struct sockaddr* so
     memcpy(sendBuf+1,msg,msgLen);
     
     //Guarentee message was recieved
-    while(strncmp(&seqNum, recvBuf, 1) != 0) {
+    while(seqNum != recvBuf[0]) {
 	sendto(udpSock,sendBuf,msgLen+1,0,sockAddrPtr, addr_size); 
 	printf("Sent packet to client. Seq. Number: %c\n", seqNum);
 	if(recvfrom(udpSock, recvBuf,1,0,sockAddrPtr,&addr_size) > 0) { 
 	    printf("Recieved acknowledgement packet. Seq. Number: %c\n", recvBuf[0]);
+	    if(seqNum != recvBuf[0]) {
+		sendto(udpSock,recvBuf,1,0,sockAddrPtr, addr_size); 
+		printf("Send ack packet. Seq. Num: %c\n", recvBuf[0]);
+	    }
 	}
     }
 }
@@ -126,17 +129,16 @@ void sendMsg(char* msg, char seqNum, int msgLen, int udpSock,struct sockaddr* so
 //Does not need timeout
 void recvMsg(char* dst, int dstLen, char expSeqNum, int udpSock, struct sockaddr* sockAddrPtr, socklen_t addr_size ) {
     char seqNum = 'z';
+    char recvBuf[1024];
     
     //Recieve packet and send acknowledgment
-    while(strncmp(&expSeqNum, &seqNum, 1) != 0) {
-	if(recvfrom(udpSock, dst, dstLen, 0, sockAddrPtr, &addr_size) > 0) {
-	    strncpy(&seqNum, dst, 1);
+    while(seqNum != expSeqNum) {
+	if(recvfrom(udpSock, recvBuf, 1024, 0, sockAddrPtr, &addr_size) > 0) {
+	    strncpy(&seqNum, recvBuf, 1);
 	    printf("Recieved message from client. Seq. Number: %c\n", seqNum);
-	    //if(strncmp(&expSeqNum, &seqNum, 1) == 0) {
+	    memcpy(dst, recvBuf+1, dstLen);
 	    sendto(udpSock, &seqNum, 1,0, sockAddrPtr, addr_size);
 	    printf("Sent acknowledgement message. Seq. Number: %c\n", seqNum);
-	    //break;
-	    //}
 	}
     }
 }
@@ -147,7 +149,9 @@ void transferfile(FILE* f, int udpSock, struct sockaddr* sockAddrPtr, socklen_t 
     int acks[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     int win_start = 0;
     int win_end = 0;
-    
+    int numpacksread = 0;
+    int lastpacksize = 0;
+    int win_count = 0;
     
     //get size of file in bytes
     int size = filesize(f);
@@ -159,11 +163,7 @@ void transferfile(FILE* f, int udpSock, struct sockaddr* sockAddrPtr, socklen_t 
     sendMsg((char*)&sendSize, 'b', sizeof(sendSize), udpSock, sockAddrPtr, addr_size);
     int totalpacks = ceil((double)size / (double) (PACK_SIZE-1));
     int numpacks = totalpacks;
-    int numpacksread = 0;
-    int numpackssent = 0;
-    int lastpacksize = 0;
-    int lastpackpos = -1;
-    int win_count = 0;
+    int lastpackseqnum = (totalpacks % 10) - 1;
     
     while(numpacks > 0) {
 	int i, nbytes;
@@ -173,6 +173,7 @@ void transferfile(FILE* f, int udpSock, struct sockaddr* sockAddrPtr, socklen_t 
 	i = win_end % 5;
 	for(; i<5; i++) {
 	    if(win_count == 5) break;           //Window is full
+	    if(numpacksread == totalpacks) break; //no more packets
 	    nbytes = fread(buf,1,sizeof(buf),f);//Read next data from file
 	    if(nbytes <= 0) break;              //Nothing more to read
 	    numpacksread++;
@@ -185,9 +186,9 @@ void transferfile(FILE* f, int udpSock, struct sockaddr* sockAddrPtr, socklen_t 
 	    
 	    sendto(udpSock,window[i],nbytes+1,0,sockAddrPtr, addr_size);
 	    printf("Sent packet of size %d and seq. num %c\n", nbytes+1, window[i][0]);
-	    if(numpacksread == totalpacks){
+	   
+	    if(seqNum == lastpackseqnum) {
 		lastpacksize = nbytes;
-		lastpackpos = i;
 	    }
 	    win_end = (win_end + 1) % 10;
 	}
@@ -196,26 +197,28 @@ void transferfile(FILE* f, int udpSock, struct sockaddr* sockAddrPtr, socklen_t 
 	nbytes = recvfrom(udpSock,ack_buf,1,0,sockAddrPtr,&addr_size);
 	if(nbytes == -1) {
 	    //No acks recieved, resend unacknowledged packets in window
-	    for(i=0; i<5; i++) {
-		int ack = acks[(win_start + i)%10];
-		if(ack == 0) {
-		    int win_index = (win_start + i) % 5;
-		    int psize = 1024;
-    		    if(i == lastpackpos){
-			psize = lastpacksize + 1;
+	    for(i=0; i<10; i++) {
+		if(IsInWindow(i, win_start)) {
+		    int ack = acks[i];
+		    if(ack == 0) {
+			int win_index = i % 5;
+			if(i == lastpackseqnum) {
+			    sendto(udpSock,window[win_index],lastpacksize+1,0,sockAddrPtr, addr_size);
+			    printf("*Re-sent packet of size %d and seq. num %c\n",lastpacksize+1, window[win_index][0]);
+			    break;
+			} 
+			sendto(udpSock,window[win_index],1024,0,sockAddrPtr, addr_size);
+			printf("*Re-sent packet of size %d and seq. num %c\n", 1024, window[win_index][0]);
 		    }
-		    else{
-			psize = 1024;
-		    }
-		    
-		    sendto(udpSock,window[win_index],psize,0,sockAddrPtr, addr_size);
-		    printf("Re-sent packet of size %d and seq. num %c\n", psize, window[win_index][0]);
-		    if(i == lastpackpos) break;
 		}
 	    }
 	} else {
 	    //Ack recieved, record ack for seq. num
 	    int ackseqNum = atoi(ack_buf);
+	    if(ack_buf[0] == 'a' || ack_buf[0] == 'b') {
+		sendto(udpSock,ack_buf,1,0,sockAddrPtr, addr_size);
+		continue;
+	    }
 	    printf("Received ack for seq. num %d\n", ackseqNum);
 	    if(acks[ackseqNum] == 0 && IsInWindow(ackseqNum, win_start) == 1) {
 		acks[ackseqNum] = 1;
